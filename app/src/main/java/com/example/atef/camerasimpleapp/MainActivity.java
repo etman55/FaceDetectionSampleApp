@@ -25,6 +25,8 @@ import android.view.WindowManager;
 import android.widget.RelativeLayout;
 import android.widget.Toast;
 
+import com.example.atef.camerasimpleapp.Ui.GraphicOverlay;
+import com.example.atef.camerasimpleapp.Ui.Preview;
 import com.google.android.gms.vision.Frame;
 import com.google.android.gms.vision.MultiProcessor;
 import com.google.android.gms.vision.Tracker;
@@ -41,10 +43,6 @@ public class MainActivity extends AppCompatActivity {
     private Preview preview;
     private Camera camera;
     private SurfaceView surfaceView;
-    private GraphicOverlay mGraphicOverlay;
-    private SparseArray<Face> mFaces;
-    FaceDetector detector;
-    Frame frame;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -53,59 +51,29 @@ public class MainActivity extends AppCompatActivity {
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);
         checkPermission();
         setContentView(R.layout.activity_main);
-//        mGraphicOverlay = (GraphicOverlay) findViewById(R.id.faceOverlay);
+
         setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
         surfaceView = (SurfaceView) findViewById(R.id.camera_preview);
         preview = new Preview(MainActivity.this, surfaceView);
-        mGraphicOverlay = new GraphicOverlay(this,null);
         preview.setLayoutParams(new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT));
         ((RelativeLayout) findViewById(R.id.layout)).addView(preview);
-        preview.addView(mGraphicOverlay); //
         preview.setKeepScreenOn(true);
     }
 
 
     private void startCamera() {
-        Log.d(TAG, "startCamera: ");
         camera = Camera.open(0);
         setCameraParameters();
         camera.startPreview();
-        preview.setCamera(camera, mGraphicOverlay);
-        camera.setPreviewCallback(new Camera.PreviewCallback() {
-            @Override
-            public void onPreviewFrame(byte[] data, Camera camera) {
-                Log.d("onPreviewFrame", "" + data.length);
-                Camera.Parameters parameters = camera.getParameters();
-                int width = parameters.getPreviewSize().width;
-                int height = parameters.getPreviewSize().height;
-                ByteArrayOutputStream outstr = new ByteArrayOutputStream();
-                Rect rect = new Rect(0, 0, width, height);
-                YuvImage yuvimage = new YuvImage(data, ImageFormat.NV21, width, height, null);
-                yuvimage.compressToJpeg(rect, 20, outstr);
-                Bitmap bmp = BitmapFactory.decodeByteArray(outstr.toByteArray(), 0, outstr.size());
-                detector = new FaceDetector.Builder(getApplicationContext())
-                        .setTrackingEnabled(true)
-                        .setClassificationType(FaceDetector.ALL_LANDMARKS)
-                        .setMode(FaceDetector.FAST_MODE)
-                        .build();
-
-                detector.setProcessor(
-                        new MultiProcessor.Builder<>(new GraphicFaceTrackerFactory())
-                                .build());
-
-                if (detector.isOperational()) {
-                    frame = new Frame.Builder().setBitmap(bmp).build();
-                    mFaces = detector.detect(frame);
-//                    detector.release();
-                }
-            }
-        });
+        preview.setCamera(camera);
     }
 
     @Override
     protected void onResume() {
         super.onResume();
         startCamera();
+        if (camera == null)
+            resetCam();
     }
 
     @Override
@@ -113,8 +81,7 @@ public class MainActivity extends AppCompatActivity {
         super.onPause();
         if (camera != null) {
             camera.stopPreview();
-            preview.setCamera(null, null);
-            camera.release();
+            preview.setCamera(null);
             camera = null;
         }
 
@@ -123,7 +90,7 @@ public class MainActivity extends AppCompatActivity {
     private void resetCam() {
         setCameraParameters();
         camera.startPreview();
-        preview.setCamera(camera, mGraphicOverlay);
+        preview.setCamera(camera);
     }
 
     private void checkPermission() {
@@ -179,71 +146,6 @@ public class MainActivity extends AppCompatActivity {
         Camera.Parameters parameters = camera.getParameters();
         List<String> focusModes = parameters.getSupportedFocusModes();
         return focusModes.contains(Parameters.FOCUS_MODE_AUTO);
-    }
-
-    //==============================================================================================
-    // Graphic Face Tracker
-    //==============================================================================================
-
-    /**
-     * Factory for creating a face tracker to be associated with a new face.  The multiprocessor
-     * uses this factory to create face trackers as needed -- one for each individual.
-     */
-    private class GraphicFaceTrackerFactory implements MultiProcessor.Factory<Face> {
-        @Override
-        public Tracker<Face> create(Face face) {
-            return new GraphicFaceTracker(mGraphicOverlay);
-        }
-    }
-
-    /**
-     * Face tracker for each detected individual. This maintains a face graphic within the app's
-     * associated face overlay.
-     */
-    private class GraphicFaceTracker extends Tracker<Face> {
-        private GraphicOverlay mOverlay;
-        private FaceGraphic mFaceGraphic;
-
-        GraphicFaceTracker(GraphicOverlay overlay) {
-            mOverlay = overlay;
-            mFaceGraphic = new FaceGraphic(overlay);
-        }
-
-        /**
-         * Start tracking the detected face instance within the face overlay.
-         */
-        @Override
-        public void onNewItem(int faceId, Face item) {
-            mFaceGraphic.setId(faceId);
-        }
-
-        /**
-         * Update the position/characteristics of the face within the overlay.
-         */
-        @Override
-        public void onUpdate(FaceDetector.Detections<Face> detectionResults, Face face) {
-            mOverlay.add(mFaceGraphic);
-            mFaceGraphic.updateFace(face);
-        }
-
-        /**
-         * Hide the graphic when the corresponding face was not detected.  This can happen for
-         * intermediate frames temporarily (e.g., if the face was momentarily blocked from
-         * view).
-         */
-        @Override
-        public void onMissing(FaceDetector.Detections<Face> detectionResults) {
-            mOverlay.remove(mFaceGraphic);
-        }
-
-        /**
-         * Called when the face is assumed to be gone for good. Remove the graphic annotation from
-         * the overlay.
-         */
-        @Override
-        public void onDone() {
-            mOverlay.remove(mFaceGraphic);
-        }
     }
 
 

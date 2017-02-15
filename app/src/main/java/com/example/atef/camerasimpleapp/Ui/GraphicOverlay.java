@@ -1,4 +1,4 @@
-package com.example.atef.camerasimpleapp;
+package com.example.atef.camerasimpleapp.Ui;
 
 import android.content.Context;
 import android.graphics.Canvas;

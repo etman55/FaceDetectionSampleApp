@@ -4,6 +4,7 @@ import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
 
+import com.example.atef.camerasimpleapp.Ui.GraphicOverlay;
 import com.google.android.gms.vision.face.Face;
 
 /**
