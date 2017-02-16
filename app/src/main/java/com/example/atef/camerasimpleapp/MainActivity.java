@@ -51,47 +51,47 @@ public class MainActivity extends AppCompatActivity {
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);
         checkPermission();
         setContentView(R.layout.activity_main);
-
         setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
         surfaceView = (SurfaceView) findViewById(R.id.camera_preview);
-        preview = new Preview(MainActivity.this, surfaceView);
+        preview = new Preview(MainActivity.this,surfaceView);
         preview.setLayoutParams(new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT));
         ((RelativeLayout) findViewById(R.id.layout)).addView(preview);
-        preview.setKeepScreenOn(true);
+        startCamera();
     }
 
 
     private void startCamera() {
         camera = Camera.open(0);
-        setCameraParameters();
-        camera.startPreview();
         preview.setCamera(camera);
+        camera.startPreview();
     }
 
     @Override
     protected void onResume() {
         super.onResume();
         startCamera();
-        if (camera == null)
-            resetCam();
     }
 
     @Override
     protected void onPause() {
         super.onPause();
         if (camera != null) {
-            camera.stopPreview();
-            preview.setCamera(null);
-            camera = null;
+            preview.release();
         }
 
     }
-
-    private void resetCam() {
-        setCameraParameters();
-        camera.startPreview();
-        preview.setCamera(camera);
+    /**
+     * Releases the resources associated with the camera source, the associated detector, and the
+     * rest of the processing pipeline.
+     */
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        if (camera != null) {
+            preview.release();
+        }
     }
+
 
     private void checkPermission() {
         if (ActivityCompat.checkSelfPermission(MainActivity.this,
@@ -126,27 +126,6 @@ public class MainActivity extends AppCompatActivity {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
     }
 
-    public void setCameraParameters() {
-        try {
-            Camera.Parameters parameters = camera.getParameters();
-            if (hasFocusMode()) {
-                parameters.setFocusMode(Camera.Parameters.FOCUS_MODE_AUTO);
-            }
-            if (getResources().getConfiguration().orientation == Configuration.ORIENTATION_PORTRAIT) {
-                camera.setDisplayOrientation(90);
-            }
-
-            camera.setParameters(parameters);
-        } catch (Exception e) {
-            Toast.makeText(this, "Problems in setting camera parameters", Toast.LENGTH_SHORT).show();
-        }
-    }
-
-    private boolean hasFocusMode() {
-        Camera.Parameters parameters = camera.getParameters();
-        List<String> focusModes = parameters.getSupportedFocusModes();
-        return focusModes.contains(Parameters.FOCUS_MODE_AUTO);
-    }
 
 
 }

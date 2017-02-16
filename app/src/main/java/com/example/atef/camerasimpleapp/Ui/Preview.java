@@ -15,6 +15,7 @@ import android.view.SurfaceView;
 import android.view.View;
 import android.view.ViewGroup;
 import android.hardware.Camera.Size;
+import android.widget.Toast;
 
 import com.example.atef.camerasimpleapp.CameraSource;
 import com.google.android.gms.vision.Detector;
@@ -41,9 +42,9 @@ public class Preview extends ViewGroup implements SurfaceHolder.Callback {
     Camera mCamera;
     Size mPreviewSize;
     List<Size> mSupportedPreviewSizes;
-    Frame mFrame;
     private SparseArray<Face> mFaces;
     FaceDetector detector;
+    Frame mFrame;
 
     /**
      * Map to convert between a byte array, received from the camera, and its associated byte
@@ -64,26 +65,68 @@ public class Preview extends ViewGroup implements SurfaceHolder.Callback {
         surfaceView = holder;
         this.surfaceHolder = surfaceView.getHolder();
         this.surfaceHolder.addCallback(this);
-        surfaceHolder.setType(SurfaceHolder.SURFACE_TYPE_PUSH_BUFFERS);
+        detector = new FaceDetector.Builder(context)
+                .setTrackingEnabled(false)
+                .setClassificationType(FaceDetector.ALL_LANDMARKS)
+                .build();
+        if (detector.isOperational())
+            detector.setProcessor(new Detector.Processor<Face>() {
+                @Override
+                public void release() {
+                    Log.d(TAG, "release processor");
+                }
+
+                @Override
+                public void receiveDetections(Detector.Detections<Face> detections) {
+                    final SparseArray<Face> faces = detections.getDetectedItems();
+                    Log.d(TAG, "receiveDetections: " + faces.size());
+                }
+            });
     }
 
+
+    private boolean hasFocusMode() {
+        Camera.Parameters parameters = mCamera.getParameters();
+        List<String> focusModes = parameters.getSupportedFocusModes();
+        return focusModes.contains(Camera.Parameters.FOCUS_MODE_AUTO);
+    }
 
     public void setCamera(Camera camera) {
 
         mCamera = camera;
         if (mCamera != null) {
             Log.d(TAG, "setCamera: ");
-            mSupportedPreviewSizes = mCamera.getParameters().getSupportedPreviewSizes();
-            requestLayout();
             Camera.Parameters parameters = mCamera.getParameters();
+            if (hasFocusMode()) {
+                parameters.setFocusMode(Camera.Parameters.FOCUS_MODE_AUTO);
+            }
+            mCamera.setParameters(parameters);
+            if (getResources().getConfiguration().orientation == Configuration.ORIENTATION_PORTRAIT) {
+                mCamera.setDisplayOrientation(90);
+            }
+            mSupportedPreviewSizes = mCamera.getParameters().getSupportedPreviewSizes();
+            mPreviewSize = getOptimalPreviewSize(mSupportedPreviewSizes, 1600, 1200);
+            parameters.setPreviewSize(mPreviewSize.width, mPreviewSize.height);
             List<String> focusModes = parameters.getSupportedFocusModes();
             if (focusModes.contains(Camera.Parameters.FOCUS_MODE_AUTO)) {
                 parameters.setFocusMode(Camera.Parameters.FOCUS_MODE_AUTO);
-                mCamera.setParameters(parameters);
             }
+            int[] previewFpsRange = selectPreviewFpsRange(mCamera, 30.0f);
+            if (previewFpsRange == null) {
+                throw new RuntimeException("Could not find suitable preview frames per second range.");
+            }
+            parameters.setPreviewFpsRange(
+                    previewFpsRange[Camera.Parameters.PREVIEW_FPS_MIN_INDEX],
+                    previewFpsRange[Camera.Parameters.PREVIEW_FPS_MAX_INDEX]);
+            parameters.setPreviewFormat(ImageFormat.NV21);
+            mCamera.setParameters(parameters);
+            mCamera.setPreviewCallbackWithBuffer(new CameraPreviewCallback());
+            mCamera.addCallbackBuffer(createPreviewBuffer(mPreviewSize));
+            mCamera.addCallbackBuffer(createPreviewBuffer(mPreviewSize));
+
+            mFrameProcessor = new FrameProcessingRunnable(detector);
 
         }
-
     }
 
     @Override
@@ -91,39 +134,28 @@ public class Preview extends ViewGroup implements SurfaceHolder.Callback {
         try {
             if (mCamera != null) {
                 mCamera.setPreviewDisplay(holder);
-
-                Log.d(TAG, "surfaceCreated: ");
+                mCamera.startPreview();
+                mProcessingThread = new Thread(mFrameProcessor);
+                mFrameProcessor.setActive(true);
+                mProcessingThread.start();
             }
 
         } catch (IOException e) {
-
+            Log.d(TAG, "surfaceCreated: " + e.toString());
         }
 
     }
 
     @Override
     public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {
-        if (mCamera != null) {
-            Camera.Parameters parameters = mCamera.getParameters();
-            parameters.setPreviewSize(mPreviewSize.width, mPreviewSize.height);
-            requestLayout();
-            mCamera.startPreview();
-            if (mPreviewSize != null) {
-                mCamera.setPreviewCallbackWithBuffer(new CameraPreviewCallback());
-                mCamera.addCallbackBuffer(createPreviewBuffer(mPreviewSize));
-                detector = new FaceDetector.Builder(getContext())
-                        .build();
-                detector.setProcessor(new MultiProcessor.Builder<>(new GraphicFaceTrackerFactory()).build());
-                mFrameProcessor = new FrameProcessingRunnable(detector);
-                mProcessingThread = new Thread(mFrameProcessor);
-                mProcessingThread.start();
-                Log.d(TAG, "addcallbacks ");
-            }
-        }
     }
 
     @Override
     public void surfaceDestroyed(SurfaceHolder holder) {
+    }
+
+    public void release() {
+        mFrameProcessor.setActive(false);
         if (mProcessingThread != null) {
             try {
                 // Wait for the thread to complete to ensure that we can't have multiple threads
@@ -135,27 +167,62 @@ public class Preview extends ViewGroup implements SurfaceHolder.Callback {
             }
             mProcessingThread = null;
         }
+
         // clear the buffer to prevent oom exceptions
         mBytesToByteBuffer.clear();
         if (mCamera != null) {
             mCamera.stopPreview();
             mCamera.setPreviewCallbackWithBuffer(null);
-            mFrameProcessor.release();
-            detector.release();
+            try {
+                mCamera.setPreviewDisplay(null);
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
             mCamera.release();
             mCamera = null;
         }
+        mFrameProcessor.release();
     }
 
+    /**
+     * Selects the most suitable preview frames per second range, given the desired frames per
+     * second.
+     *
+     * @param camera            the camera to select a frames per second range from
+     * @param desiredPreviewFps the desired frames per second for the camera preview frames
+     * @return the selected preview frames per second range
+     */
+    private int[] selectPreviewFpsRange(Camera camera, float desiredPreviewFps) {
+        // The camera API uses integers scaled by a factor of 1000 instead of floating-point frame
+        // rates.
+        int desiredPreviewFpsScaled = (int) (desiredPreviewFps * 1000.0f);
 
-    @Override
-    protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
-        final int width = resolveSize(getSuggestedMinimumWidth(), widthMeasureSpec);
-        final int height = resolveSize(getSuggestedMinimumHeight(), heightMeasureSpec);
-        setMeasuredDimension(width, height);
-        if (mSupportedPreviewSizes != null)
-            mPreviewSize = getOptimalPreviewSize(mSupportedPreviewSizes, width, height);
+        // The method for selecting the best range is to minimize the sum of the differences between
+        // the desired value and the upper and lower bounds of the range.  This may select a range
+        // that the desired value is outside of, but this is often preferred.  For example, if the
+        // desired frame rate is 29.97, the range (30, 30) is probably more desirable than the
+        // range (15, 30).
+        int[] selectedFpsRange = null;
+        int minDiff = Integer.MAX_VALUE;
+        List<int[]> previewFpsRangeList = camera.getParameters().getSupportedPreviewFpsRange();
+        for (int[] range : previewFpsRangeList) {
+            int deltaMin = desiredPreviewFpsScaled - range[Camera.Parameters.PREVIEW_FPS_MIN_INDEX];
+            int deltaMax = desiredPreviewFpsScaled - range[Camera.Parameters.PREVIEW_FPS_MAX_INDEX];
+            int diff = Math.abs(deltaMin) + Math.abs(deltaMax);
+            if (diff < minDiff) {
+                selectedFpsRange = range;
+                minDiff = diff;
+            }
+        }
+        return selectedFpsRange;
     }
+
+//    @Override
+//    protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
+//        final int width = resolveSize(getSuggestedMinimumWidth(), widthMeasureSpec);
+//        final int height = resolveSize(getSuggestedMinimumHeight(), heightMeasureSpec);
+//        setMeasuredDimension(width, height);
+//    }
 
     @Override
     protected void onLayout(boolean changed, int l, int t, int r, int b) {
@@ -183,8 +250,8 @@ public class Preview extends ViewGroup implements SurfaceHolder.Callback {
                         width, (height + scaledChildHeight) / 2);
             }
         }
-        if (mCamera != null)
-            setCamera(mCamera);
+
+
     }
 
     private Size getOptimalPreviewSize(List<Size> sizes, int w, int h) {
@@ -224,7 +291,6 @@ public class Preview extends ViewGroup implements SurfaceHolder.Callback {
     // Frame processing
     //==============================================================================================
 
-
     /**
      * Creates one buffer for the camera preview callback.  The size of the buffer is based off of
      * the camera preview size and the format of the camera image.
@@ -255,9 +321,7 @@ public class Preview extends ViewGroup implements SurfaceHolder.Callback {
     private class CameraPreviewCallback implements Camera.PreviewCallback {
         @Override
         public void onPreviewFrame(byte[] data, Camera camera) {
-            if (data != null)
-                mFrameProcessor.setNextFrame(data, camera);
-            Log.d(TAG, "onPreviewFrame: " + data);
+            mFrameProcessor.setNextFrame(data, camera);
         }
     }
 
@@ -275,7 +339,10 @@ public class Preview extends ViewGroup implements SurfaceHolder.Callback {
         private Detector<?> mDetector;
         private long mStartTimeMillis = SystemClock.elapsedRealtime();
 
-        private final Object lock = new Object();
+        // This lock guards all of the member variables below.
+        private final Object mLock = new Object();
+        private boolean mActive = true;
+
         // These pending variables hold the state associated with the new frame awaiting processing.
         private long mPendingTimeMillis;
         private int mPendingFrameId = 0;
@@ -296,14 +363,23 @@ public class Preview extends ViewGroup implements SurfaceHolder.Callback {
             mDetector = null;
         }
 
+        /**
+         * Marks the runnable as active/not active.  Signals any blocked threads to continue.
+         */
+        void setActive(boolean active) {
+            synchronized (mLock) {
+                mActive = active;
+                mLock.notifyAll();
+            }
+        }
 
         /**
-         * Sets the frame data received from the camera.  This adds the previous unused frame buffe0.r
+         * Sets the frame data received from the camera.  This adds the previous unused frame buffer
          * (if present) back to the camera, and keeps a pending reference to the frame data for
          * future use.
          */
         void setNextFrame(byte[] data, Camera camera) {
-            synchronized (lock) {
+            synchronized (mLock) {
                 if (mPendingFrameData != null) {
                     camera.addCallbackBuffer(mPendingFrameData.array());
                     mPendingFrameData = null;
@@ -323,7 +399,7 @@ public class Preview extends ViewGroup implements SurfaceHolder.Callback {
                 mPendingFrameData = mBytesToByteBuffer.get(data);
 
                 // Notify the processor thread if it is waiting on the next frame (see below).
-                lock.notifyAll();
+                mLock.notifyAll();
             }
         }
 
@@ -343,41 +419,43 @@ public class Preview extends ViewGroup implements SurfaceHolder.Callback {
          */
         @Override
         public void run() {
-            Log.d(TAG, "run: ");
             Frame outputFrame;
             ByteBuffer data;
+
             while (true) {
-                synchronized (lock) {
-                    while (mPendingFrameData == null) {
+                synchronized (mLock) {
+                    while (mActive && (mPendingFrameData == null)) {
                         try {
                             // Wait for the next frame to be received from the camera, since we
                             // don't have it yet.
-                            lock.wait();
+                            mLock.wait();
                         } catch (InterruptedException e) {
                             Log.d(TAG, "Frame processing loop terminated.", e);
                             return;
                         }
                     }
+
+                    if (!mActive) {
+                        // Exit the loop once this camera source is stopped or released.  We check
+                        // this here, immediately after the wait() above, to handle the case where
+                        // setActive(false) had been called, triggering the termination of this
+                        // loop.
+                        return;
+                    }
+
                     outputFrame = new Frame.Builder()
                             .setImageData(mPendingFrameData, mPreviewSize.width,
                                     mPreviewSize.height, ImageFormat.NV21)
                             .setId(mPendingFrameId)
                             .setTimestampMillis(mPendingTimeMillis)
                             .build();
-
-                    if (detector.isOperational()) {
-                        if (outputFrame != null) {
-                            mFaces = detector.detect(outputFrame);
-                            Log.d(TAG, "faces: " + mFaces.size());
-                            detector.release();
-                        }
-                    }
-
+                    mFrame = outputFrame;
                     // Hold onto the frame data locally, so that we can use this for detection
                     // below.  We need to clear mPendingFrameData to ensure that this buffer isn't
                     // recycled back to the camera before we are done using that data.
                     data = mPendingFrameData;
                     mPendingFrameData = null;
+
                 }
 
                 // The code below needs to run outside of synchronization, because this will allow
@@ -389,13 +467,12 @@ public class Preview extends ViewGroup implements SurfaceHolder.Callback {
                 } catch (Throwable t) {
                     Log.e(TAG, "Exception thrown from receiver.", t);
                 } finally {
-                    if (mCamera != null)
-                        mCamera.addCallbackBuffer(data.array());
+                    mCamera.addCallbackBuffer(data.array());
                 }
             }
-
         }
     }
+
 
     /**
      * Factory for creating a face tracker to be associated with a new face.  The multiprocessor
@@ -405,6 +482,7 @@ public class Preview extends ViewGroup implements SurfaceHolder.Callback {
 
         @Override
         public Tracker<Face> create(Face face) {
+            Log.d(TAG, "create face: ");
             return new GraphicFaceTracker();
         }
     }
