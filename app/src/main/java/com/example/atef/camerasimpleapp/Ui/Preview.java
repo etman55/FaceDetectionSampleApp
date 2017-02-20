@@ -42,7 +42,7 @@ public class Preview extends ViewGroup implements SurfaceHolder.Callback {
     Camera mCamera;
     Size mPreviewSize;
     List<Size> mSupportedPreviewSizes;
-//    private GraphicOverlay mOverlay;
+    private GraphicOverlay mOverlay;
 
     /**
      * Map to convert between a byte array, received from the camera, and its associated byte
@@ -72,8 +72,8 @@ public class Preview extends ViewGroup implements SurfaceHolder.Callback {
         return focusModes.contains(Camera.Parameters.FOCUS_MODE_AUTO);
     }
 
-    public void setCamera(Camera camera) {
-//        mOverlay = mGraphicOverlay;
+    public void setCamera(Camera camera,GraphicOverlay mGraphicOverlay) {
+        mOverlay = mGraphicOverlay;
         mCamera = camera;
         if (mCamera != null) {
             Camera.Parameters parameters = mCamera.getParameters();
@@ -105,18 +105,18 @@ public class Preview extends ViewGroup implements SurfaceHolder.Callback {
             mCamera.addCallbackBuffer(createPreviewBuffer(mPreviewSize));
             mCamera.addCallbackBuffer(createPreviewBuffer(mPreviewSize));
             mCamera.addCallbackBuffer(createPreviewBuffer(mPreviewSize));
-//            if (mOverlay != null) {
-//                int min = Math.min(mPreviewSize.width, mPreviewSize.height);
-//                int max = Math.max(mPreviewSize.width, mPreviewSize.height);
-//                if (getResources().getConfiguration().orientation == Configuration.ORIENTATION_PORTRAIT) {
-//                    // Swap width and height sizes when in portrait, since it will be rotated by
-//                    // 90 degrees
-//                    mOverlay.setCameraInfo(min, max, Camera.CameraInfo.CAMERA_FACING_BACK);
-//                } else {
-//                    mOverlay.setCameraInfo(max, min, Camera.CameraInfo.CAMERA_FACING_BACK);
-//                }
-//                mOverlay.clear();
-//            }
+            if (mOverlay != null) {
+                int min = Math.min(mPreviewSize.width, mPreviewSize.height);
+                int max = Math.max(mPreviewSize.width, mPreviewSize.height);
+                if (getResources().getConfiguration().orientation == Configuration.ORIENTATION_PORTRAIT) {
+                    // Swap width and height sizes when in portrait, since it will be rotated by
+                    // 90 degrees
+                    mOverlay.setCameraInfo(min, max, Camera.CameraInfo.CAMERA_FACING_BACK);
+                } else {
+                    mOverlay.setCameraInfo(max, min, Camera.CameraInfo.CAMERA_FACING_BACK);
+                }
+                mOverlay.clear();
+            }
         }
     }
 
@@ -142,7 +142,7 @@ public class Preview extends ViewGroup implements SurfaceHolder.Callback {
 
     @Override
     public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {
-        setCamera(mCamera);
+        setCamera(mCamera,mOverlay);
     }
 
     @Override

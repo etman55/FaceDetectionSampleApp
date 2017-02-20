@@ -46,7 +46,7 @@ public class MainActivity extends AppCompatActivity {
         setContentView(R.layout.activity_main);
         setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
         surfaceView = (SurfaceView) findViewById(R.id.camera_preview);
-//        mGraphicOverlay = (GraphicOverlay) findViewById(R.id.faceOverlay);
+        mGraphicOverlay = (GraphicOverlay) findViewById(R.id.faceOverlay);
         preview = new Preview(MainActivity.this, surfaceView);
         preview.setLayoutParams(new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT));
         ((RelativeLayout) findViewById(R.id.layout)).addView(preview);
@@ -55,29 +55,16 @@ public class MainActivity extends AppCompatActivity {
 
     private void startCamera() {
         camera = Camera.open(0);
-        preview.setCamera(camera);
+        preview.setCamera(camera,mGraphicOverlay);
         camera.startPreview();
         detector = new FaceDetector.Builder(this)
-                .setTrackingEnabled(false)
-                .setLandmarkType(FaceDetector.ALL_LANDMARKS)
+                .setClassificationType(FaceDetector.ALL_LANDMARKS)
                 .build();
         preview.startDetection(detector);
         if (detector.isOperational()) {
-            Log.d(TAG, "start detector");
-            detector.setProcessor(new Detector.Processor<Face>() {
-                @Override
-                public void release() {
-                }
-                @Override
-                public void receiveDetections(Detector.Detections<Face> detections) {
-                    SparseArray<Face> faces = detections.getDetectedItems();
-//                    Log.d(TAG, "receiveDetections: " + detections.getFrameMetadata().getId());
-                    Log.d(TAG, "Detections: " + faces.size());
-                }
-            });
-//            detector.setProcessor(
-//                    new MultiProcessor.Builder<>(new GraphicFaceTrackerFactory())
-//                            .build());
+            detector.setProcessor(
+                    new MultiProcessor.Builder<>(new GraphicFaceTrackerFactory())
+                            .build());
         } else
             Log.d(TAG, "Face detector dependencies are not yet available.");
     }
@@ -146,7 +133,6 @@ public class MainActivity extends AppCompatActivity {
     private class GraphicFaceTrackerFactory implements MultiProcessor.Factory<Face> {
         @Override
         public Tracker<Face> create(Face face) {
-            Log.d(TAG, "tracker create" + face.getId());
             return new GraphicFaceTracker(mGraphicOverlay);
         }
     }
@@ -160,7 +146,6 @@ public class MainActivity extends AppCompatActivity {
         private FaceGraphic mFaceGraphic;
 
         GraphicFaceTracker(GraphicOverlay overlay) {
-            Log.d(TAG, "GraphicFaceTracker: ");
             mOverlay = overlay;
             mFaceGraphic = new FaceGraphic(overlay);
         }
@@ -170,7 +155,6 @@ public class MainActivity extends AppCompatActivity {
          */
         @Override
         public void onNewItem(int faceId, Face item) {
-            Log.d(TAG, "onNewItem: ");
             mFaceGraphic.setId(faceId);
         }
 
@@ -181,7 +165,6 @@ public class MainActivity extends AppCompatActivity {
         public void onUpdate(FaceDetector.Detections<Face> detectionResults, Face face) {
             mOverlay.add(mFaceGraphic);
             mFaceGraphic.updateFace(face);
-            Log.d(TAG, "onUpdate: ");
         }
 
         /**
@@ -192,7 +175,6 @@ public class MainActivity extends AppCompatActivity {
         @Override
         public void onMissing(FaceDetector.Detections<Face> detectionResults) {
             mOverlay.remove(mFaceGraphic);
-            Log.d(TAG, "onMissing: ");
         }
 
         /**
@@ -202,7 +184,6 @@ public class MainActivity extends AppCompatActivity {
         @Override
         public void onDone() {
             mOverlay.remove(mFaceGraphic);
-            Log.d(TAG, "onDone: ");
         }
     }
 
