@@ -67,9 +67,7 @@ public class MainActivity extends AppCompatActivity {
             detector.setProcessor(new Detector.Processor<Face>() {
                 @Override
                 public void release() {
-
                 }
-
                 @Override
                 public void receiveDetections(Detector.Detections<Face> detections) {
                     SparseArray<Face> faces = detections.getDetectedItems();
