@@ -42,9 +42,7 @@ public class Preview extends ViewGroup implements SurfaceHolder.Callback {
     Camera mCamera;
     Size mPreviewSize;
     List<Size> mSupportedPreviewSizes;
-    private SparseArray<Face> mFaces;
-    FaceDetector detector;
-    Frame mFrame;
+//    private GraphicOverlay mOverlay;
 
     /**
      * Map to convert between a byte array, received from the camera, and its associated byte
@@ -65,23 +63,6 @@ public class Preview extends ViewGroup implements SurfaceHolder.Callback {
         surfaceView = holder;
         this.surfaceHolder = surfaceView.getHolder();
         this.surfaceHolder.addCallback(this);
-        detector = new FaceDetector.Builder(context)
-                .setTrackingEnabled(false)
-                .setClassificationType(FaceDetector.ALL_LANDMARKS)
-                .build();
-        if (detector.isOperational())
-            detector.setProcessor(new Detector.Processor<Face>() {
-                @Override
-                public void release() {
-                    Log.d(TAG, "release processor");
-                }
-
-                @Override
-                public void receiveDetections(Detector.Detections<Face> detections) {
-                    final SparseArray<Face> faces = detections.getDetectedItems();
-                    Log.d(TAG, "receiveDetections: " + faces.size());
-                }
-            });
     }
 
 
@@ -92,10 +73,9 @@ public class Preview extends ViewGroup implements SurfaceHolder.Callback {
     }
 
     public void setCamera(Camera camera) {
-
+//        mOverlay = mGraphicOverlay;
         mCamera = camera;
         if (mCamera != null) {
-            Log.d(TAG, "setCamera: ");
             Camera.Parameters parameters = mCamera.getParameters();
             if (hasFocusMode()) {
                 parameters.setFocusMode(Camera.Parameters.FOCUS_MODE_AUTO);
@@ -123,10 +103,28 @@ public class Preview extends ViewGroup implements SurfaceHolder.Callback {
             mCamera.setPreviewCallbackWithBuffer(new CameraPreviewCallback());
             mCamera.addCallbackBuffer(createPreviewBuffer(mPreviewSize));
             mCamera.addCallbackBuffer(createPreviewBuffer(mPreviewSize));
-
-            mFrameProcessor = new FrameProcessingRunnable(detector);
-
+            mCamera.addCallbackBuffer(createPreviewBuffer(mPreviewSize));
+            mCamera.addCallbackBuffer(createPreviewBuffer(mPreviewSize));
+//            if (mOverlay != null) {
+//                int min = Math.min(mPreviewSize.width, mPreviewSize.height);
+//                int max = Math.max(mPreviewSize.width, mPreviewSize.height);
+//                if (getResources().getConfiguration().orientation == Configuration.ORIENTATION_PORTRAIT) {
+//                    // Swap width and height sizes when in portrait, since it will be rotated by
+//                    // 90 degrees
+//                    mOverlay.setCameraInfo(min, max, Camera.CameraInfo.CAMERA_FACING_BACK);
+//                } else {
+//                    mOverlay.setCameraInfo(max, min, Camera.CameraInfo.CAMERA_FACING_BACK);
+//                }
+//                mOverlay.clear();
+//            }
         }
+    }
+
+    public void startDetection(FaceDetector detector) {
+        mFrameProcessor = new FrameProcessingRunnable(detector);
+        mProcessingThread = new Thread(mFrameProcessor);
+        mFrameProcessor.setActive(true);
+        mProcessingThread.start();
     }
 
     @Override
@@ -135,11 +133,7 @@ public class Preview extends ViewGroup implements SurfaceHolder.Callback {
             if (mCamera != null) {
                 mCamera.setPreviewDisplay(holder);
                 mCamera.startPreview();
-                mProcessingThread = new Thread(mFrameProcessor);
-                mFrameProcessor.setActive(true);
-                mProcessingThread.start();
             }
-
         } catch (IOException e) {
             Log.d(TAG, "surfaceCreated: " + e.toString());
         }
@@ -148,6 +142,7 @@ public class Preview extends ViewGroup implements SurfaceHolder.Callback {
 
     @Override
     public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {
+        setCamera(mCamera);
     }
 
     @Override
@@ -167,7 +162,6 @@ public class Preview extends ViewGroup implements SurfaceHolder.Callback {
             }
             mProcessingThread = null;
         }
-
         // clear the buffer to prevent oom exceptions
         mBytesToByteBuffer.clear();
         if (mCamera != null) {
@@ -217,13 +211,6 @@ public class Preview extends ViewGroup implements SurfaceHolder.Callback {
         return selectedFpsRange;
     }
 
-//    @Override
-//    protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
-//        final int width = resolveSize(getSuggestedMinimumWidth(), widthMeasureSpec);
-//        final int height = resolveSize(getSuggestedMinimumHeight(), heightMeasureSpec);
-//        setMeasuredDimension(width, height);
-//    }
-
     @Override
     protected void onLayout(boolean changed, int l, int t, int r, int b) {
         if (changed && getChildCount() > 0) {
@@ -258,12 +245,9 @@ public class Preview extends ViewGroup implements SurfaceHolder.Callback {
         final double ASPECT_TOLERANCE = 0.1;
         double targetRatio = (double) w / h;
         if (sizes == null) return null;
-
         Size optimalSize = null;
         double minDiff = Double.MAX_VALUE;
-
         int targetHeight = h;
-
         // Try to find an size match aspect ratio and size
         for (Size size : sizes) {
             double ratio = (double) size.width / size.height;
@@ -273,7 +257,6 @@ public class Preview extends ViewGroup implements SurfaceHolder.Callback {
                 minDiff = Math.abs(size.height - targetHeight);
             }
         }
-
         // Cannot find the one match the aspect ratio, ignore the requirement
         if (optimalSize == null) {
             minDiff = Double.MAX_VALUE;
@@ -310,7 +293,6 @@ public class Preview extends ViewGroup implements SurfaceHolder.Callback {
             // passing the preview content to the underlying detector later.
             throw new IllegalStateException("Failed to create valid buffer for camera source.");
         }
-
         mBytesToByteBuffer.put(byteArray, buffer);
         return byteArray;
     }
@@ -447,21 +429,18 @@ public class Preview extends ViewGroup implements SurfaceHolder.Callback {
                             .setImageData(mPendingFrameData, mPreviewSize.width,
                                     mPreviewSize.height, ImageFormat.NV21)
                             .setId(mPendingFrameId)
+                            .setRotation(getResources().getConfiguration().orientation)
                             .setTimestampMillis(mPendingTimeMillis)
                             .build();
-                    mFrame = outputFrame;
                     // Hold onto the frame data locally, so that we can use this for detection
                     // below.  We need to clear mPendingFrameData to ensure that this buffer isn't
                     // recycled back to the camera before we are done using that data.
                     data = mPendingFrameData;
                     mPendingFrameData = null;
-
                 }
-
                 // The code below needs to run outside of synchronization, because this will allow
                 // the camera to add pending frame(s) while we are running detection on the current
                 // frame.
-
                 try {
                     mDetector.receiveFrame(outputFrame);
                 } catch (Throwable t) {
@@ -470,61 +449,6 @@ public class Preview extends ViewGroup implements SurfaceHolder.Callback {
                     mCamera.addCallbackBuffer(data.array());
                 }
             }
-        }
-    }
-
-
-    /**
-     * Factory for creating a face tracker to be associated with a new face.  The multiprocessor
-     * uses this factory to create face trackers as needed -- one for each individual.
-     */
-    private class GraphicFaceTrackerFactory implements MultiProcessor.Factory<Face> {
-
-        @Override
-        public Tracker<Face> create(Face face) {
-            Log.d(TAG, "create face: ");
-            return new GraphicFaceTracker();
-        }
-    }
-
-    private class GraphicFaceTracker extends Tracker<Face> {
-
-        GraphicFaceTracker() {
-        }
-
-        /**
-         * Start tracking the detected face instance within the face overlay.
-         */
-        @Override
-        public void onNewItem(int faceId, Face item) {
-            Log.d(TAG, "onNewItem: ");
-        }
-
-        /**
-         * Update the position/characteristics of the face within the overlay.
-         */
-        @Override
-        public void onUpdate(FaceDetector.Detections<Face> detectionResults, Face face) {
-            Log.d(TAG, "onUpdate: ");
-        }
-
-        /**
-         * Hide the graphic when the corresponding face was not detected.  This can happen for
-         * intermediate frames temporarily (e.g., if the face was momentarily blocked from
-         * view).
-         */
-        @Override
-        public void onMissing(FaceDetector.Detections<Face> detectionResults) {
-            Log.d(TAG, "onMissing: ");
-        }
-
-        /**
-         * Called when the face is assumed to be gone for good. Remove the graphic annotation from
-         * the overlay.
-         */
-        @Override
-        public void onDone() {
-            Log.d(TAG, "onDone: ");
         }
     }
 }
