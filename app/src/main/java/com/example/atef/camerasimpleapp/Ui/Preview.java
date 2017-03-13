@@ -7,9 +7,11 @@ import android.content.pm.ActivityInfo;
 import android.content.res.Configuration;
 import android.graphics.ImageFormat;
 import android.hardware.Camera;
+import android.hardware.SensorManager;
 import android.os.SystemClock;
 import android.util.Log;
 import android.util.SparseArray;
+import android.view.OrientationEventListener;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
 import android.view.View;
@@ -43,6 +45,8 @@ public class Preview extends ViewGroup implements SurfaceHolder.Callback {
     Size mPreviewSize;
     List<Size> mSupportedPreviewSizes;
     private GraphicOverlay mOverlay;
+    private OrientationEventListener orientationEventListener;
+    int faceRotation;
 
     /**
      * Map to convert between a byte array, received from the camera, and its associated byte
@@ -65,14 +69,13 @@ public class Preview extends ViewGroup implements SurfaceHolder.Callback {
         this.surfaceHolder.addCallback(this);
     }
 
-
     private boolean hasFocusMode() {
         Camera.Parameters parameters = mCamera.getParameters();
         List<String> focusModes = parameters.getSupportedFocusModes();
         return focusModes.contains(Camera.Parameters.FOCUS_MODE_AUTO);
     }
 
-    public void setCamera(Camera camera,GraphicOverlay mGraphicOverlay) {
+    public void setCamera(Camera camera, GraphicOverlay mGraphicOverlay) {
         mOverlay = mGraphicOverlay;
         mCamera = camera;
         if (mCamera != null) {
@@ -85,7 +88,7 @@ public class Preview extends ViewGroup implements SurfaceHolder.Callback {
                 mCamera.setDisplayOrientation(90);
             }
             mSupportedPreviewSizes = mCamera.getParameters().getSupportedPreviewSizes();
-            mPreviewSize = getOptimalPreviewSize(mSupportedPreviewSizes, 1600, 1200);
+            mPreviewSize = getOptimalPreviewSize(mSupportedPreviewSizes, 800, 600);
             parameters.setPreviewSize(mPreviewSize.width, mPreviewSize.height);
             List<String> focusModes = parameters.getSupportedFocusModes();
             if (focusModes.contains(Camera.Parameters.FOCUS_MODE_AUTO)) {
@@ -105,6 +108,31 @@ public class Preview extends ViewGroup implements SurfaceHolder.Callback {
             mCamera.addCallbackBuffer(createPreviewBuffer(mPreviewSize));
             mCamera.addCallbackBuffer(createPreviewBuffer(mPreviewSize));
             mCamera.addCallbackBuffer(createPreviewBuffer(mPreviewSize));
+            orientationEventListener = new OrientationEventListener(getContext(),
+                    SensorManager.SENSOR_DELAY_NORMAL) {
+                @Override
+                public void onOrientationChanged(int orientation) {
+                    if (orientation == ORIENTATION_UNKNOWN) return;
+                    //up
+                    if (orientation >= 0 && orientation < 45)
+                        faceRotation = 1;
+                        //right & back camera
+                    else if (orientation >= 45 && orientation < 135)
+                        faceRotation = 2;
+                        //down
+                    else if (orientation >= 135 && orientation < 225)
+                        faceRotation = 3;
+                        //left & back camera
+                    else if (orientation >= 225 && orientation < 315)
+                        faceRotation = 0;
+                        //still up
+                    else if (orientation >= 315 && orientation < 359)
+                        faceRotation = 1;
+                }
+            };
+            if (orientationEventListener.canDetectOrientation()) {
+                orientationEventListener.enable();
+            }
             if (mOverlay != null) {
                 int min = Math.min(mPreviewSize.width, mPreviewSize.height);
                 int max = Math.max(mPreviewSize.width, mPreviewSize.height);
@@ -142,7 +170,7 @@ public class Preview extends ViewGroup implements SurfaceHolder.Callback {
 
     @Override
     public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {
-        setCamera(mCamera,mOverlay);
+        setCamera(mCamera, mOverlay);
     }
 
     @Override
@@ -425,13 +453,22 @@ public class Preview extends ViewGroup implements SurfaceHolder.Callback {
                         return;
                     }
 
+                    if(faceRotation == 1 || faceRotation == 3)
                     outputFrame = new Frame.Builder()
-                            .setImageData(mPendingFrameData, mPreviewSize.width,
-                                    mPreviewSize.height, ImageFormat.NV21)
+                            .setImageData(mPendingFrameData, 800,
+                                    600, ImageFormat.NV21)
                             .setId(mPendingFrameId)
-                            .setRotation(getResources().getConfiguration().orientation)
+                            .setRotation(faceRotation)
                             .setTimestampMillis(mPendingTimeMillis)
                             .build();
+                    else
+                        outputFrame = new Frame.Builder()
+                                .setImageData(mPendingFrameData, 600,
+                                        800, ImageFormat.NV21)
+                                .setId(mPendingFrameId)
+                                .setRotation(faceRotation)
+                                .setTimestampMillis(mPendingTimeMillis)
+                                .build();
                     // Hold onto the frame data locally, so that we can use this for detection
                     // below.  We need to clear mPendingFrameData to ensure that this buffer isn't
                     // recycled back to the camera before we are done using that data.
