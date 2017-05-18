@@ -12,11 +12,13 @@ import android.os.SystemClock;
 import android.util.Log;
 import android.util.SparseArray;
 import android.view.OrientationEventListener;
+import android.view.Surface;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
 import android.view.View;
 import android.view.ViewGroup;
 import android.hardware.Camera.Size;
+import android.view.WindowManager;
 import android.widget.Toast;
 
 import com.example.atef.camerasimpleapp.CameraSource;
@@ -67,6 +69,9 @@ public class Preview extends ViewGroup implements SurfaceHolder.Callback {
         surfaceView = holder;
         this.surfaceHolder = surfaceView.getHolder();
         this.surfaceHolder.addCallback(this);
+
+        // deprecated setting, but required on Android versions prior to 3.0
+        surfaceHolder.setType(SurfaceHolder.SURFACE_TYPE_PUSH_BUFFERS);
     }
 
     private boolean hasFocusMode() {
@@ -84,10 +89,11 @@ public class Preview extends ViewGroup implements SurfaceHolder.Callback {
                 parameters.setFocusMode(Camera.Parameters.FOCUS_MODE_AUTO);
             }
             mCamera.setParameters(parameters);
-            if (getResources().getConfiguration().orientation == Configuration.ORIENTATION_PORTRAIT) {
-                mCamera.setDisplayOrientation(90);
-            }
+            // supported preview sizes
             mSupportedPreviewSizes = mCamera.getParameters().getSupportedPreviewSizes();
+            for (Camera.Size str : mSupportedPreviewSizes)
+                Log.d(TAG, str.width + "/" + str.height);
+
             mPreviewSize = getOptimalPreviewSize(mSupportedPreviewSizes, 800, 600);
             parameters.setPreviewSize(mPreviewSize.width, mPreviewSize.height);
             List<String> focusModes = parameters.getSupportedFocusModes();
@@ -165,11 +171,62 @@ public class Preview extends ViewGroup implements SurfaceHolder.Callback {
         } catch (IOException e) {
             Log.d(TAG, "surfaceCreated: " + e.toString());
         }
+    }
+    /**
+     * Calculates the correct rotation for the given camera id and sets the rotation in the
+     * parameters.  It also sets the camera's display orientation and rotation.
+     *
+     * @param parameters the camera parameters for which to set the rotation
+     * @param cameraId   the camera id to set rotation based on
+     */
+    public void setRotation(Camera camera, Camera.Parameters parameters, int cameraId,Context context) {
+        WindowManager windowManager =
+                (WindowManager) context.getSystemService(Context.WINDOW_SERVICE);
+        int degrees = 0;
+        int rotation = windowManager.getDefaultDisplay().getRotation();
+        switch (rotation) {
+            case Surface.ROTATION_0:
+                degrees = 0;
+                break;
+            case Surface.ROTATION_90:
+                degrees = 90;
+                break;
+            case Surface.ROTATION_180:
+                degrees = 180;
+                break;
+            case Surface.ROTATION_270:
+                degrees = 270;
+                break;
+            default:
+                Log.e(TAG, "Bad rotation value: " + rotation);
+        }
 
+        Camera.CameraInfo cameraInfo = new Camera.CameraInfo();
+        Camera.getCameraInfo(cameraId, cameraInfo);
+
+        int angle;
+        int displayAngle;
+        if (cameraInfo.facing == Camera.CameraInfo.CAMERA_FACING_FRONT) {
+            angle = (cameraInfo.orientation + degrees) % 360;
+            displayAngle = (360 - angle) % 360; // compensate for it being mirrored
+        } else {  // back-facing
+            angle = (cameraInfo.orientation - degrees + 360) % 360;
+            displayAngle = angle;
+        }
+        camera.setDisplayOrientation(displayAngle);
+        parameters.setRotation(angle);
     }
 
     @Override
     public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {
+        Log.e(TAG, "surfaceChanged => w=" + width + ", h=" + height);
+        // If your preview can change or rotate, take care of those events here.
+        // Make sure to stop the preview before resizing or reformatting it.
+
+        if (holder.getSurface() == null){
+            // preview surface does not exist
+            return;
+        }
         setCamera(mCamera, mOverlay);
     }
 
@@ -240,6 +297,26 @@ public class Preview extends ViewGroup implements SurfaceHolder.Callback {
     }
 
     @Override
+    protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
+        final int width = resolveSize(getSuggestedMinimumWidth(), widthMeasureSpec);
+        final int height = resolveSize(getSuggestedMinimumHeight(), heightMeasureSpec);
+        if (mSupportedPreviewSizes != null) {
+            mPreviewSize = getOptimalPreviewSize(mSupportedPreviewSizes, width, height);
+        }
+        if (mPreviewSize != null) {
+            float ratio;
+            if (mPreviewSize.height >= mPreviewSize.width)
+                ratio = (float) mPreviewSize.height / (float) mPreviewSize.width;
+            else
+                ratio = (float) mPreviewSize.width / (float) mPreviewSize.height;
+
+            // One of these methods should be used, second method squishes preview slightly
+            setMeasuredDimension(width, (int) (width * ratio));
+
+        }
+    }
+
+    @Override
     protected void onLayout(boolean changed, int l, int t, int r, int b) {
         if (changed && getChildCount() > 0) {
             final View child = getChildAt(0);
@@ -265,8 +342,6 @@ public class Preview extends ViewGroup implements SurfaceHolder.Callback {
                         width, (height + scaledChildHeight) / 2);
             }
         }
-
-
     }
 
     private Size getOptimalPreviewSize(List<Size> sizes, int w, int h) {
@@ -366,9 +441,7 @@ public class Preview extends ViewGroup implements SurfaceHolder.Callback {
          * Releases the underlying receiver.  This is only safe to do after the associated thread
          * has completed, which is managed in camera source's release method above.
          */
-        @SuppressLint("Assert")
         void release() {
-            assert (mProcessingThread.getState() == Thread.State.TERMINATED);
             mDetector.release();
             mDetector = null;
         }
@@ -453,18 +526,18 @@ public class Preview extends ViewGroup implements SurfaceHolder.Callback {
                         return;
                     }
 
-                    if(faceRotation == 1 || faceRotation == 3)
-                    outputFrame = new Frame.Builder()
-                            .setImageData(mPendingFrameData, 800,
-                                    600, ImageFormat.NV21)
-                            .setId(mPendingFrameId)
-                            .setRotation(faceRotation)
-                            .setTimestampMillis(mPendingTimeMillis)
-                            .build();
+                    if (faceRotation == 1 || faceRotation == 3)
+                        outputFrame = new Frame.Builder()
+                                .setImageData(mPendingFrameData, 800,
+                                        600, ImageFormat.NV21)
+                                .setId(mPendingFrameId)
+                                .setRotation(faceRotation)
+                                .setTimestampMillis(mPendingTimeMillis)
+                                .build();
                     else
                         outputFrame = new Frame.Builder()
-                                .setImageData(mPendingFrameData, 600,
-                                        800, ImageFormat.NV21)
+                                .setImageData(mPendingFrameData, 800,
+                                        600, ImageFormat.NV21)
                                 .setId(mPendingFrameId)
                                 .setRotation(faceRotation)
                                 .setTimestampMillis(mPendingTimeMillis)

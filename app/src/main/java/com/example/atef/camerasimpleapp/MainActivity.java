@@ -4,6 +4,7 @@ import android.Manifest;
 import android.content.pm.ActivityInfo;
 import android.content.pm.PackageManager;
 import android.hardware.Camera;
+import android.os.Build;
 import android.support.annotation.NonNull;
 import android.support.v4.app.ActivityCompat;
 
@@ -40,7 +41,8 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        checkPermission();
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M)
+            checkPermission();
         requestWindowFeature(Window.FEATURE_NO_TITLE);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);
         setContentView(R.layout.activity_main);
@@ -54,8 +56,22 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void startCamera() {
-        camera = Camera.open(0);
-        preview.setCamera(camera,mGraphicOverlay);
+        Camera.CameraInfo info = new Camera.CameraInfo();
+        for (int i = 0; i < Camera.getNumberOfCameras(); i++) {
+            Camera.getCameraInfo(i, info);
+            if (info.facing == Camera.CameraInfo.CAMERA_FACING_FRONT) {
+                try {
+                    // Gets to here OK
+                    camera = Camera.open(i);
+                    preview.setRotation(camera, camera.getParameters(), i, this);
+                } catch (Exception e) {
+                    e.printStackTrace();
+                    //  throws runtime exception :"Failed to connect to camera service"
+                }
+            }
+        }
+
+        preview.setCamera(camera, mGraphicOverlay);
         camera.startPreview();
         detector = new FaceDetector.Builder(this)
                 .setClassificationType(FaceDetector.ALL_LANDMARKS)
